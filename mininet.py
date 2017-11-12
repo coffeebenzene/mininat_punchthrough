@@ -21,7 +21,7 @@ class myTopo(Topo):
     h1        h2
     """
     
-    def build(self): # Recommended method to overrider instead of __init__
+    def build(self): # Recommended method to override instead of __init__
         
         # Add clients (hosts).
         client1 = self.addHost('h1', ip='10.0.1.1/8')
