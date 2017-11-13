@@ -70,9 +70,18 @@ def setup_mininet(net):
         if node.name.startswith("R"):
             node.cmd("sysctl net.ipv4.ip_forward=1")
     
-    # Set nat. (In filter table, everything is allowed by default, so no need to set.)
+    # Set iptables NAT.
     for nat_name in ["R1", "R2"]:
         nat = net.get(nat_name)
+        # In filter table, everything is allowed by default, so no need to set.
+        #nat.cmd("iptables -A FORWARD -o {0}-eth1 -i {0}-eth0 -s 10.0.0.0/8 -m conntrack --ctstate NEW -j ACCEPT".format(nat))
+        #nat.cmd("iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT")
+        
+        # Hack to prevent symmetric-NATing by dropping unknown prackets instead of rejecting.
+        # This makes iptables NAT a port-restricted cone NAT.
+        nat.cmd("iptables -A INPUT -m conntrack --ctstate NEW -j DROP")
+        
+        # Actual NAT rules
         nat.cmd("iptables -t nat -F POSTROUTING") # Flush just in case
         nat.cmd("iptables -t nat -A POSTROUTING -o {}-eth1 -j MASQUERADE".format(nat_name))
 
