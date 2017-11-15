@@ -69,7 +69,7 @@ def main(room_id=0, server_address=("3.0.0.2",80)):
     
     # UDP socket
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.setsocktimeout(5.0)
+    s.settimeout(5.0)
     
     # Setup keepalive variables
     ka_box = AtomicVariable((room_id, server_address))
