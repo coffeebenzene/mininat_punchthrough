@@ -90,9 +90,9 @@ def main(room_id=0, server_address=("3.0.0.2",80)):
     data = data.split("\n")
     my_addr = (data[0], int(data[1]))
     other_addr = (data[2], int(data[3]))
-    punch_key = data[4]
+    punch_key = data[4] # Assume punch_key is length 8. Not checked.
     
-    logger.info("Recevied from server:\n{}\n{}\n{}".format(my_addr, other_addr, punch_key))
+    logger.info('Recevied from server:\n{}\n{}\n"{}"'.format(my_addr, other_addr, punch_key))
     
     # Handshaking. Can be made more robust, but for the sake of simplicity:
     # Assume that all clients follow protocol. This means that max difference in
@@ -104,7 +104,7 @@ def main(room_id=0, server_address=("3.0.0.2",80)):
     ka_interval.set(1)
     while state<2:
         data, address = s.recvfrom(65507)
-        if address != other_addr and data[0:8] != punch_key:
+        if address != other_addr or data[0:8] != punch_key:
             continue
         # use -1 for invalid states (errors). Accept but won't do anything.
         givenstate = STATEMAP.get(data[8:16], -1) + 1
