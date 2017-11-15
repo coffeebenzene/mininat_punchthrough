@@ -2,11 +2,13 @@ import argparse
 import socket
 import threading
 import time
+import logging
 
 import Tkinter as tkr
 import ttk
 
-
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 STATEMAP = {0:"    INIT",
             1:"RECV-RDY",
@@ -69,14 +71,13 @@ def main(room_id=0, server_address=("3.0.0.2",80)):
     
     # UDP socket
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.settimeout(5.0)
     
     # Setup keepalive variables
     ka_box = AtomicVariable((room_id, server_address))
     ka_interval = AtomicVariable(10)
     next_time = AtomicVariable(time.time())
     # Keepalive is also the request to server for connection. Until ka_box is changed.
-    ka_thread = threading.thread(target=keepalive, args=(s, ka_box, ka_interval))
+    ka_thread = threading.Thread(target=keepalive, args=(s, ka_box, ka_interval))
     ka_thread.start()
     
     # Server response format:
@@ -91,12 +92,14 @@ def main(room_id=0, server_address=("3.0.0.2",80)):
     other_addr = (data[2], int(data[3]))
     punch_key = data[4]
     
+    logger.info("Recevied from server:\n{}\n{}\n{}".format(my_addr, other_addr, punch_key))
+    
     # Handshaking. Can be made more robust, but for the sake of simplicity:
     # Assume that all clients follow protocol. This means that max difference in
     # state between 2 clients is 1 (i.e. No state 0 and state 2.)
     # Also, clients only send actual data when state is 2.
     state = 0
-    hs_payload = "{}{}".format(punchkey, STATEMAP[state])
+    hs_payload = "{}{}".format(punch_key, STATEMAP[state])
     ka_box.set((hs_payload,other_addr))
     ka_interval.set(1)
     while state<2:
@@ -106,12 +109,14 @@ def main(room_id=0, server_address=("3.0.0.2",80)):
         # use -1 for invalid states (errors). Accept but won't do anything.
         givenstate = STATEMAP.get(data[8:16], -1) + 1
         if givenstate > state:
+            prev_state = state
             state = givenstate if givenstate<=2 else 2 # Max state is 2.
-            hs_payload = "{}{}".format(punchkey, STATEMAP[state])
+            hs_payload = "{}{}".format(punch_key, STATEMAP[state])
             ka_box.set((hs_payload,other_addr))
+            logger.info("Changed from state {} to {}".format(prev_state, state))
     
     # There may be data sent in the previous message if givenstate is 3 (i.e. state from other client is 2). Check.
-    print("STATE 2 NOW!")
+    pass
     
     # Receive and send data.
     
