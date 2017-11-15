@@ -3,6 +3,25 @@ import socket
 import threading
 import time
 
+import Tkinter as tkr
+import ttk
+
+
+
+STATEMAP = {0:"    INIT",
+            1:"RECV-RDY",
+            2:"SEND-RDY",
+            "    INIT":0,
+            "RECV-RDY":1,
+            "SEND-RDY":2,
+           }
+
+class Application(Frame):
+    pass
+
+
+
+# Threading related
 class AtomicVariable():
     """For extra security"""
     
@@ -22,13 +41,27 @@ class AtomicVariable():
 
 
 
-def keepalive(sock, ka_box, do_keepalive):
+def keepalive(sock, ka_box, ka_interval, next_time):
     """Thread function. Send keepalives to specified address every 10s."""
-    while do_keepalive.get():
+    while ka_interval.get() > 0:
+        # Send keepalive/periodic message.
         payload, address = ka_box.get()
         sock.sendto(payload, address)
-        time.sleep(10)
+        
+        # Set next keepalive
+        next_time.set(time.time() + ka_interval.get())
+        
+        # Sleep until next keepalive, polling for changes in next_time every 1s.
+        # (since python can't interrupt nicely.)
+        while next_time.get() > time.time():
+            sleeptime = next_time.get() - time.time()
+            if sleeptime > 1:
+                sleeptime = 1
+            time.sleep(sleeptime)
 
+
+
+# Main
 def main(room_id=0, server_address=("3.0.0.2",80)):
     if not (0 <= room_id <= 999999):
         raise ValueError("Room ID must be a 6 digit number (0-999999).")
@@ -36,19 +69,20 @@ def main(room_id=0, server_address=("3.0.0.2",80)):
     
     # UDP socket
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.setsocktimeout(5.0)
+    s.settimeout(5.0)
     
-    # Start keepalive and server request
+    # Setup keepalive variables
     ka_box = AtomicVariable((room_id, server_address))
-    do_keepalive = AtomicVariable(True)
-    ka_thread = threading.thread(target=keepalive, args=(s, ka_box, do_keepalive))
+    ka_interval = AtomicVariable(10)
+    next_time = AtomicVariable(time.time())
     # Keepalive is also the request to server for connection. Until ka_box is changed.
+    ka_thread = threading.thread(target=keepalive, args=(s, ka_box, ka_interval))
     ka_thread.start()
     
     # Server response format:
     # {requester ip}\n{requester port}\n{other ip}\n{other port}\n{random key}
     while True:
-        data, address = s.recvfrom(65507)
+        data, address = s.recvfrom(65507) # Always receive max UDP packet size.
         if address == server_address:
             break
     
@@ -57,7 +91,31 @@ def main(room_id=0, server_address=("3.0.0.2",80)):
     other_addr = (data[2], int(data[3]))
     punch_key = data[4]
     
+    # Handshaking. Can be made more robust, but for the sake of simplicity:
+    # Assume that all clients follow protocol. This means that max difference in
+    # state between 2 clients is 1 (i.e. No state 0 and state 2.)
+    # Also, clients only send actual data when state is 2.
     state = 0
+    hs_payload = "{}{}".format(punchkey, STATEMAP[state])
+    ka_box.set((hs_payload,other_addr))
+    ka_interval.set(1)
+    while state<2:
+        data, address = s.recvfrom(65507)
+        if address != other_addr and data[0:8] != punch_key:
+            continue
+        # use -1 for invalid states (errors). Accept but won't do anything.
+        givenstate = STATEMAP.get(data[8:16], -1) + 1
+        if givenstate > state:
+            state = givenstate if givenstate<=2 else 2 # Max state is 2.
+            hs_payload = "{}{}".format(punchkey, STATEMAP[state])
+            ka_box.set((hs_payload,other_addr))
+    
+    # There may be data sent in the previous message if givenstate is 3 (i.e. state from other client is 2). Check.
+    print("STATE 2 NOW!")
+    
+    # Receive and send data.
+    
+
 
 
 if __name__ == "__main__":
