@@ -1,32 +1,53 @@
 import socket, random, time
 import argparse
 
-
-
 information = {} #array of addresses
+timeOuts = {}
+socketTimeOut = 30
+clientConnectionTimeOut = 300
 
 def main(port):
     SERVER_IP = "3.0.0.2"
     PORT = port
     sock = socket.socket(socket.AF_INET,socket.SOCK_DGRAM) #declare is internet and UDP connection
     sock.bind((SERVER_IP,PORT))
+    sock.settimeout(socketTimeOut)
+
     print "entering while loop"
     while True:
-        room_id,address = sock.recvfrom(1024) #6
-        print "I have received a connection"
-        # ip_add = address[0]
-        # port = address[1]
+        """
+        This code operates under the assumption that clients will continually send connection request messages
+        """
+        #This creates a dictionary of all connections which have timed out
+        timedOutConnections = {k:v for (k,v) in timeOuts.items() if v < time.time()}
+        print "Timed out connections: {0}".format(timedOutConnections)
+        for roomID, timeOut in timedOutConnections.iteritems():
+            print "Timed out: Kicking roomID: {0}".format(roomID)
+            timeOuts.pop(roomID) #delete the room and try again
+            information.pop(roomID)	
+        
+        try:
+            room_id,address = sock.recvfrom(1024) #6
+        except socket.timeout:
+            print("Skip")
+            continue
+		
+	    print "I have received a connection"
         if room_id not in information:
             print "Registering first host"
             information[room_id] = address
-            timeout = time.time() + 300 #start the timeout
-            print "setted timeout"
+            timeout = time.time() + clientConnectionTimeOut #start the timeout
+            timeOuts[room_id]  = timeout
+            print "setted timeout: {0}".format(timeout)
 
-        #the second time a room ID is received aka there's a request from h2
+        #Check if the message was sent by the same guy again 
+        elif information[room_id] == address:
+            print "Same idiot spamming us requests, ignore him"
+            continue 
         else:
-            if time.time() > timeout:
-                print "timedout occured."
-                information.clear() #delete the room and try again
+            #Check if the time has yet to expire
+            if time.time() > timeOuts[room_id]:
+                print "timedout occured." # Let the code segment before the try statement do the popping
             else:
                 #combine source from h1 and h2
                 #generate the key
