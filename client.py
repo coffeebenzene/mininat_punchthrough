@@ -1,4 +1,5 @@
 import argparse
+import collections
 import socket
 import threading
 import time
@@ -8,6 +9,7 @@ import Tkinter as tkr
 import ttk
 import ScrolledText
 
+logging.basicConfig()
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -49,27 +51,15 @@ class Application(ttk.Frame):
         self.textarea.insert(tkr.END, "\n")
         self.textarea.configure(state=tkr.DISABLED)
     
-    def allow_sending(self, sock, dest_addr):
-        self.sock=sock
-        self.dest_addr = dest_addr
+    def allow_sending(self, sendqueue, send_semaphore):
+        self.sendqueue = sendqueue
+        self.send_semaphore = send_semaphore
         self.sendbtn["state"] = tkr.NORMAL
     
     def send(self, event=None):
-        print event # DEBUG
-
-class socket_wrapper(object):
-    
-    def __init__(self, sock, dest_addr, punch_key):
-        self.sock = sock
-        self.dest_addr = dest_addr
-        self.punch_key = punch_key
-        self.state = 2
-        self.seq_num = 0
-        self.ack_num = 0
-    
-    def send(self, payload):
-        msg = "" # NEED TO FIGURE OUT HOW TIMEOUT A SEND MESSAGE, so can retry sending.
-        
+        self.sendqueue.append(self.input_field.get())
+        self.input_val.set("")
+        self.send_semaphore.release()
 
 
 
@@ -111,18 +101,7 @@ def keepalive(sock, ka_box, ka_interval, next_time):
                 sleeptime = 1
             time.sleep(sleeptime)
 
-
-
-# Main (Receiver thread.)
-def main(room_id=0, server_address=("3.0.0.2",80)):
-    if not (0 <= room_id <= 999999):
-        raise ValueError("Room ID must be a 6 digit number (0-999999).")
-    room_id = "{:06}".format(room_id)
-    
-    # Setup Application in another thread.
-    app = Application(master=tkr.Tk())
-    app_thread = threading.Thread(target=app.mainloop)
-    
+def punchthrough_receive(app, room_id, server_address):
     # UDP socket
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     
@@ -130,17 +109,18 @@ def main(room_id=0, server_address=("3.0.0.2",80)):
     ka_box = AtomicVariable((room_id, server_address))
     ka_interval = AtomicVariable(10)
     next_time = AtomicVariable(time.time())
-    # Keepalive is also the request to server for connection. Until ka_box is changed.
-    ka_thread = threading.Thread(target=keepalive, args=(s, ka_box, ka_interval, next_time))
-    ka_thread.start()
+    # punchthrough_receive() exclusively uses keepalive thread for sending data via ka_box.
+    # Initially request to server for connection.
+    threading.Thread(target=keepalive, args=(s, ka_box, ka_interval, next_time)).start()
     
     # Allow closing of window to close everything.
     def closewrapper():
         ka_interval.set(-1)
-        app.destroy()
+        app.master.destroy()
         s.shutdown(socket.SHUT_RDWR)
-    app.protocol("WM_DELETE_WINDOW", closewrapper)
-    app.insert(">>>> Waiting for server to provide peer.")
+        s.close()
+    app.master.protocol("WM_DELETE_WINDOW", closewrapper)
+    app.insert_text(">>>> Waiting for server to provide peer.")
     
     # Server response format:
     # {requester ip}\n{requester port}\n{other ip}\n{other port}\n{random key}
@@ -154,8 +134,8 @@ def main(room_id=0, server_address=("3.0.0.2",80)):
     other_addr = (data[2], int(data[3]))
     punch_key = data[4] # Assume punch_key is length 8. Not checked.
     
-    app.insert(">>>> Connecting to {}...".format(other_addr))
-    app.insert('>>>> Punch key : "{}"...'.format(punch_key))
+    app.insert_text(">>>> Connecting to {}...".format(other_addr))
+    app.insert_text('>>>> Punch key : "{}"...'.format(punch_key))
     logger.info('Recevied from server:\n{}\n{}\n"{}"'.format(my_addr, other_addr, punch_key))
     
     # Handshaking. Can be made more robust, but for the sake of simplicity:
@@ -180,19 +160,53 @@ def main(room_id=0, server_address=("3.0.0.2",80)):
             logger.info("Changed from state {} to {}".format(prev_state, state))
     ka_interval.set(10)
     
-    app.insert(">>>> Connected.")
+    app.insert_text(">>>> Connected.")
+    
+    # Allow sending on GUI
+    sendqueue = collections.deque()
+    send_semaphore = threading.Semaphore(0)
+    app.allow_sending(sendqueue, send_semaphore)
+    threading.Thread(target=sender, args=(s, other_addr, sendqueue, send_semaphore, ka_interval)).start()
     
     # There may be data sent in the previous message if state from other client is 2.
     # To guard against this, simply try to process data first.
-    # Process and Receive data.
+    # keepalive used for sending ACKs.
+    ack_num = 1
     while ka_interval.get() > 0:
-        # process data here
+        # process data
+        if len(data) >= 32:
+            recv_seqnum = data[16:24]
+            recv_acknum = data[24:32]
+            recv_payload = data[32:]
+            # More processing for fragmented messages needed. #TODO
+            app.insert_text("Peer: {}".format(recv_payload))
+            # if valid data, set ack_num = recv_seq_num+1
+            # Also, set other_side_ack_num = max(other_side_ack_num, recv_ack_num) for sender to use.
+        # Receive data
         data, address = s.recvfrom(65507)
         if address != other_addr or data[0:8] != punch_key:
             continue
+
+def sender(s, other_addr, sendqueue, send_semaphore, ka_interval):
+    while ka_interval.get() > 0:
+        send_semaphore.acquire()
+        tosend = sendqueue.popleft()
+        # NEED TO FOLLOW PROTOCOL!! #TODO
+        # More processing for fragmented messages needed. #TODO
+        s.sendto(tosend, other_addr)
+
+
+
+# Main GUI thread.
+def main(room_id=0, server_address=("3.0.0.2",80)):
+    if not (0 <= room_id <= 999999):
+        raise ValueError("Room ID must be a 6 digit number (0-999999).")
+    room_id = "{:06}".format(room_id)
     
-    # End
-    ka_interval.set(-1)
+    app = Application(master=tkr.Tk())
+    threading.Thread(target=punchthrough_receive, args=(app, room_id, server_address)).start()
+    
+    app.mainloop()
 
 
 
