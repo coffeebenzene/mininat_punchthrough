@@ -1,6 +1,8 @@
 # 50.012 Networks Project
 # NAT punchthrough
 
+This can be more easily read at https://github.com/coffeebenzene/mininat_punchthrough
+
 ## Group:
 * Amish 1001614
 * Sidney 1001525
@@ -17,7 +19,7 @@ In this project, the connection will be used for a chatroom between 2 hosts.
 
 `X--R--internet`
 
-In the above network, R is a NATing gateway. A packet from A to the internet will
+In the above network, R is a NAT gateway. A packet from A to the internet will
 have its source IP(A) and port(A) changed to IP(R) and port(R). R will then expect
 a return packet with destination IP(R) and port(R).
 
@@ -66,7 +68,10 @@ reply with an ICMP port unreachable message. However, even though it is an ICMP
 message that was sent, this connection is tracked and the previously unassigned
 UDP port will become considered assigned. Then when the host behind the NAT sends
 a packet it will be translated to a different IP and port on the NAT.
-This makes the iptables NAT similar to a symmetric NAT, and very difficult to punchthrough.
+This makes the iptables NAT similar to a symmetric NAT, and very difficult to
+punchthrough.
+
+This case was bypassed by setting iptables to drop all unknown incomming packets.
 
 ### Server
 The server is simply an intermediary server that sends the IP addresses and ports
@@ -74,7 +79,7 @@ to the clients that send a requests to it. This is how the client knows the othe
 client's IP(R) and port(R) (from above).
 
 ### Client
-THe client first sends a request to the server, and receives the NATted IP
+The client first sends a request to the server, and receives the NATted IP
 address and port of the other client.
 
 Then, the client sends packets to the other client's NATted Ip address and port.
@@ -84,4 +89,4 @@ allowed through.
 
 Once a round trip is confirmed, the client allows sending of messages on the chat.
 The protocol used for the chat takes inspriation from TCP and is intended to
-allow arbitarily large messages and reliable transport.
+allow arbitarily large messages and reliable transport. (Not implemented yet.)
