@@ -205,13 +205,52 @@ def punchthrough_receive(app, room_id, server_address):
             if address == other_addr and data[0:8] == punch_key:
                 break
 
+def fragmentation_sender(packet):
+    fragmented_array = []
+    size_to_break_down = 50 * 1000 - 32 #50kB
+    data_length = len(packet)
+    times_to_break_down = data_length / size_to_break_down
+    for i in range(times_to_break_down):
+        fragmented_array.append(packet[size_to_break_down*i:size_to_break_down*(i+1)])
+    #insert the remaining trail
+    fragmented_array.append(packet[(size_to_break_down*times_to_break_down):])
+    return fragmented_array
+
+def fragmentation_receiver(existing_message,packet):
+    existing_message.append(packet)
+    return existing_message
+
 def sender(s, other_addr, sendqueue, send_semaphore, ka_interval):
     while ka_interval.get() > 0:
         send_semaphore.acquire()
         tosend = sendqueue.popleft()
-        # NEED TO FOLLOW PROTOCOL!! #TODO
-        # More processing for fragmented messages needed. #TODO
-        s.sendto(tosend, other_addr)
+        # print(tosend)
+        # TODO
+        # NEED TO FOLLOW PROTOCOL!!
+        seqnum = 0
+        acknum = 0
+        seqnum = "%08d" %(seqnum)
+        acknum = "%08d" %(acknum)
+        if len(tosend) > 65507:
+            print("fragmenting")
+            # TODO
+            # More processing for fragmented messages needed.
+            sliced_array = fragmentation_sender(tosend)
+            # print(sliced_array)
+            for i in sliced_array:
+                print(seqnum)
+                # tosend = seqnum + acknum+i
+                tosend = i 
+                # print(len(tosend))
+                # tosend = str(seqnum) + str(acknum) + i
+                s.sendto(tosend, other_addr)
+                seqnum = "%08d" %(int(seqnum) + len(tosend)) #increase sequence number
+
+
+        else:
+            s.sendto(tosend, other_addr)
+
+
 
 
 
