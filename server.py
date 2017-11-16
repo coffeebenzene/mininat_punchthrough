@@ -32,8 +32,12 @@ def main(port):
             print("Skip")
             continue
 		
-	    print "I have received a connection"
-        if room_id not in information:
+	     print "I have received a connection"
+        if information[room_id][0] == address[0]:
+            print "Same idiot spamming us requests, ignore him"
+            continue 
+        
+        elif room_id not in information:
             print "Registering first host"
             information[room_id] = address
             timeout = time.time() + clientConnectionTimeOut #start the timeout
@@ -41,9 +45,7 @@ def main(port):
             print "setted timeout: {0}".format(timeout)
 
         #Check if the message was sent by the same guy again 
-        elif information[room_id] == address:
-            print "Same idiot spamming us requests, ignore him"
-            continue 
+
         else:
             #Check if the time has yet to expire
             if time.time() > timeOuts[room_id]:
