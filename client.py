@@ -104,6 +104,7 @@ def keepalive(sock, ka_box, ka_interval, next_time):
 def punchthrough_receive(app, room_id, server_address):
     # UDP socket
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.settimeout(1.0) # Make thread interruptable
     
     # Setup keepalive variables
     ka_box = AtomicVariable((room_id, server_address))
@@ -116,16 +117,22 @@ def punchthrough_receive(app, room_id, server_address):
     # Allow closing of window to close everything.
     def closewrapper():
         ka_interval.set(-1)
+        next_time.set(time.time())
         app.master.destroy()
-        s.shutdown(socket.SHUT_RDWR)
         s.close()
+        # Last, because will cause exception if sendqueue is empty.
+        if hasattr(app,"send_semaphore"):
+            app.send_semaphore.release()
     app.master.protocol("WM_DELETE_WINDOW", closewrapper)
     app.insert_text(">>>> Waiting for server to provide peer.")
     
     # Server response format:
     # {requester ip}\n{requester port}\n{other ip}\n{other port}\n{random key}
     while True:
-        data, address = s.recvfrom(65507) # Always receive max UDP packet size.
+        try:
+            data, address = s.recvfrom(65507) # Always receive max UDP packet size.
+        except socket.timeout:
+            continue
         if address == server_address:
             break
     
@@ -146,8 +153,14 @@ def punchthrough_receive(app, room_id, server_address):
     hs_payload = punch_key + STATEMAP[state]
     ka_box.set((hs_payload,other_addr))
     ka_interval.set(1)
+    next_time.set(time.time())
     while state<2:
-        data, address = s.recvfrom(65507)
+        try:
+            data, address = s.recvfrom(65507)
+        except socket.timeout:
+            if ka_interval.get() < 0: # Allow exiting.
+                raise
+            continue
         if address != other_addr or data[0:8] != punch_key:
             continue
         # use -1 for invalid states (errors). Accept but won't do anything.
@@ -184,8 +197,11 @@ def punchthrough_receive(app, room_id, server_address):
             # if valid data, set ack_num = recv_seq_num+1
             # Also, set other_side_ack_num = max(other_side_ack_num, recv_ack_num) for sender to use.
         # Receive data (ignore non-NAT punchthrough datagrams)
-        while True:
-            data, address = s.recvfrom(65507)
+        while ka_interval.get() > 0:
+            try:
+                data, address = s.recvfrom(65507)
+            except socket.timeout:
+                continue
             if address == other_addr and data[0:8] == punch_key:
                 break
 
