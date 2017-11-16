@@ -170,6 +170,7 @@ def punchthrough_receive(app, room_id, server_address):
     
     # There may be data sent in the previous message if state from other client is 2.
     # To guard against this, simply try to process data first.
+    # Requires inner loop on Receive data part. (Alternative is duplicate process data part before loop.)
     # keepalive used for sending ACKs.
     ack_num = 1
     while ka_interval.get() > 0:
@@ -182,10 +183,11 @@ def punchthrough_receive(app, room_id, server_address):
             app.insert_text("Peer: {}".format(recv_payload))
             # if valid data, set ack_num = recv_seq_num+1
             # Also, set other_side_ack_num = max(other_side_ack_num, recv_ack_num) for sender to use.
-        # Receive data
-        data, address = s.recvfrom(65507)
-        if address != other_addr or data[0:8] != punch_key:
-            continue
+        # Receive data (ignore non-NAT punchthrough datagrams)
+        while True:
+            data, address = s.recvfrom(65507)
+            if address == other_addr and data[0:8] == punch_key:
+                break
 
 def sender(s, other_addr, sendqueue, send_semaphore, ka_interval):
     while ka_interval.get() > 0:
