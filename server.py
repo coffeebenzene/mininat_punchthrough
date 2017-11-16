@@ -1,56 +1,69 @@
-import socket, random, time
 import argparse
+import random
+import socket
+import time
+import logging
 
+logging.basicConfig()
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
+# mapping of {room_id : [address, timeout]}
+room_map = {}
+running = True
 
-information = {} #array of addresses
+def cleanup():
+    current_time = time.time()
+    timed_out = [k for k,v in room_map.iteritems() if v[1]<current_time]
+    for rm_id in timed_out:
+        del room_map[rm_id]
 
-def main(port):
-    SERVER_IP = "3.0.0.2"
-    PORT = port
-    sock = socket.socket(socket.AF_INET,socket.SOCK_DGRAM) #declare is internet and UDP connection
-    sock.bind((SERVER_IP,PORT))
-    print "entering while loop"
+def main(args):
+    # UDP socket
+    sock = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+    sock.bind((args.ip,args.port))
+    sock.settimeout(1) # Timeout so that will loop and do cleanup
+    
+    room_timeout = args.timeout
     while True:
-        room_id,address = sock.recvfrom(1024) #6
-        print "I have received a connection"
-        # ip_add = address[0]
-        # port = address[1]
-        if room_id not in information:
-            print "Registering first host"
-            information[room_id] = address
-            timeout = time.time() + 300 #start the timeout
-            print "setted timeout"
-
-        #the second time a room ID is received aka there's a request from h2
-        else:
-            if time.time() > timeout:
-                print "timedout occured."
-                information.clear() #delete the room and try again
-            else:
-                #combine source from h1 and h2
-                #generate the key
-                print "timeedout did not occur & second host has connected"
-                key = random.randint(0,99999999)
-                key = "%08d" %(key)
-                print "key: " + str(key)
-                #concanate the two address together to send to the client
-                data_for_second_host = str(address[0]) + '\n' + str(address[1]) + '\n' + str(information[room_id][0]) + '\n' + str(information[room_id][1]) + '\n' + str(key)
-                data_for_first_host = str(information[room_id][0]) + '\n' + str(information[room_id][1]) + '\n' + str(address[0]) + '\n' + str(address[1]) + '\n' + str(key)
-                print "for 1st host: \n"  +data_for_first_host
-                print "for 2nd host: \n" + data_for_second_host
-                #send the information to each host
-
-                sock.sendto(data_for_first_host,information[room_id])
-                print "sent to 1st host"
-                sock.sendto(data_for_second_host,address)
-                print "sent to 2nd host"
-
-                print "Clearing the room id information"
-                information.clear()
+        cleanup()
+        try:
+            room_id, address = sock.recvfrom(6) # Receive 6 digit room id.
+        except socket.timeout:
+            continue
+        
+        if room_id not in room_map: # New request
+            room_map[room_id] = [address, time.time() + room_timeout]
+            logger.info("First host for room_id {} : {}".format(room_id, room_map[room_id]))
+        elif room_map[room_id][0] == address: # Repeated request (update timeout)
+            room_map[room_id][1] = time.time() + room_timeout
+            logger.info("Updated timeout for room_id {} : {}".format(room_id, room_map[room_id]))
+        elif time.time() > room_map[room_id][1]: # 2nd host request but timed out.
+            logger.info("Timed-out for room_id {} : {}".format(room_id, room_map[room_id]))
+            del room_map[room_id]
+        else: # 2nd host request. (accepted)
+            logger.info("<LINK> Accepted 2nd host for room_id {} : {} | host2:{}".format(room_id, room_map[room_id], address))
+            # Generate the key
+            key = random.randint(0,99999999)
+            key = "{:08}".format(key)
+            logger.info("<LINK> Generated key:{}".format(key))
+            # Generate data to send
+            host1_addr = room_map[room_id][0]
+            host2_addr = address
+            host1_data = [host1_addr[0], str(host1_addr[1]), host2_addr[0], str(host2_addr[1]), key]
+            host1_data = "\n".join(host1_data)
+            host2_data = [host2_addr[0], str(host2_addr[1]), host1_addr[0], str(host1_addr[1]), key]
+            host2_data = "\n".join(host2_data)
+            # Send data
+            sock.sendto(host1_data, host1_addr)
+            sock.sendto(host2_data, host2_addr)
+            # Room is used, remove room.
+            del room_map[room_id]
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('-p', '--port', type=int, default="1025", help='Set Server Port')
+    parser.add_argument('-i', '--ip', type=str, default="3.0.0.2", help='Server ip')
+    parser.add_argument('-p', '--port', type=int, default=80, help='Set Server Port')
+    parser.add_argument('-t', '--timeout', type=int, default=30, help='Set timeout for room ids in seconds')
     args = parser.parse_args()
-    main(args.port)
+    main(args)
