@@ -13,3 +13,5 @@ def fragmentation(packet):
     return fragmented_array
 
 print fragmentation("A" * 65507 * 2)
+print("A" * 65507 * 2)
+print("%08d" %(0))
