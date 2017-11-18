@@ -29,6 +29,7 @@ class Application(ttk.Frame):
         self.textarea = ScrolledText.ScrolledText(self)
         self.textarea.grid(row=0, column=0, columnspan=2, sticky="NSEW")
         self.textarea.configure(state=tkr.DISABLED)
+        self.textarea_lock = threading.Lock()
         
         self.input_val = tkr.StringVar()
         self.input_field = ttk.Entry(self, text = self.input_val)
@@ -46,10 +47,11 @@ class Application(ttk.Frame):
         self.master.title("NAT Punchthrough")
     
     def insert_text(self, text):
-        self.textarea.configure(state=tkr.NORMAL)
-        self.textarea.insert(tkr.END, text)
-        self.textarea.insert(tkr.END, "\n")
-        self.textarea.configure(state=tkr.DISABLED)
+        with self.textarea_lock:
+            self.textarea.configure(state=tkr.NORMAL)
+            self.textarea.insert(tkr.END, text)
+            self.textarea.insert(tkr.END, "\n")
+            self.textarea.configure(state=tkr.DISABLED)
     
     def allow_sending(self, sendqueue, send_semaphore):
         self.sendqueue = sendqueue
@@ -57,7 +59,7 @@ class Application(ttk.Frame):
         self.sendbtn["state"] = tkr.NORMAL
     
     def send(self, event=None):
-        self.sendqueue.append(self.input_field.get())
+        self.sendqueue.append((self.input_field.get(), "MSG ", "FULL", "00000000"))
         self.input_val.set("")
         self.send_semaphore.release()
 
@@ -82,7 +84,6 @@ class AtomicVariable(object):
         return value
 
 
-
 def keepalive(sock, ka_box, ka_interval, next_time):
     """Thread function. Send keepalives to specified address every 10s."""
     while ka_interval.get() > 0:
@@ -100,6 +101,7 @@ def keepalive(sock, ka_box, ka_interval, next_time):
             if sleeptime > 1:
                 sleeptime = 1
             time.sleep(sleeptime)
+
 
 def punchthrough_receive(app, room_id, server_address):
     # UDP socket
@@ -120,9 +122,6 @@ def punchthrough_receive(app, room_id, server_address):
         next_time.set(time.time())
         app.master.destroy()
         s.close()
-        # Last, because will cause exception if sendqueue is empty.
-        if hasattr(app,"send_semaphore"):
-            app.send_semaphore.release()
     app.master.protocol("WM_DELETE_WINDOW", closewrapper)
     app.insert_text(">>>> Waiting for server to provide peer.")
     
@@ -168,34 +167,80 @@ def punchthrough_receive(app, room_id, server_address):
         if givenstate > state:
             prev_state = state
             state = givenstate if givenstate<=2 else 2 # Max state is 2.
-            hs_payload = "{}{}".format(punch_key, STATEMAP[state])
+            hs_payload = punch_key + STATEMAP[state]
             ka_box.set((hs_payload,other_addr))
             logger.info("Changed from state {} to {}".format(prev_state, state))
     ka_interval.set(10)
     
     app.insert_text(">>>> Connected.")
     
-    # Allow sending on GUI
+    # Allow sending on GUI and initialize sender/receiver variables
     sendqueue = collections.deque()
     send_semaphore = threading.Semaphore(0)
     app.allow_sending(sendqueue, send_semaphore)
-    threading.Thread(target=sender, args=(s, other_addr, sendqueue, send_semaphore, ka_interval)).start()
+    other_acknum = AtomicVariable(1)
+    acknum = AtomicVariable(1)
+    sender_params = {"sendqueue" : sendqueue,
+                     "send_semaphore" : send_semaphore,
+                     "other_acknum" : other_acknum,
+                     "other_addr" : other_addr,
+                     "s" : s,
+                     "ka_interval" : ka_interval,
+                     "next_ka_time" : next_time,
+                     "acknum" : acknum,
+                     "first_header" : punch_key + STATEMAP[state],
+                     "app" : app,
+                    }
+    threading.Thread(target=sender, args=(sender_params,)).start()
     
     # There may be data sent in the previous message if state from other client is 2.
     # To guard against this, simply try to process data first.
     # Requires inner loop on Receive data part. (Alternative is duplicate process data part before loop.)
-    # keepalive used for sending ACKs.
-    ack_num = 1
+    # keepalive() is used for sending ACKs.
+    # ASSUMES DATAGRAMS ARE RECEIVED IN ORDER.
+    msg_action = {"MSG " : lambda recv_msg : app.insert_text("Peer: {}".format(recv_msg)),
+                  "FILE" : lambda recv_msg : None, # ask to receive file. TODO #TODO
+                 }
+    prev_fragnum = None
+    fraglist = []
     while ka_interval.get() > 0:
         # process data
-        if len(data) >= 32:
-            recv_seqnum = data[16:24]
-            recv_acknum = data[24:32]
-            recv_payload = data[32:]
-            # More processing for fragmented messages needed. #TODO
-            app.insert_text("Peer: {}".format(recv_payload))
-            # if valid data, set ack_num = recv_seq_num+1
-            # Also, set other_side_ack_num = max(other_side_ack_num, recv_ack_num) for sender to use.
+        if len(data) >= 48:
+            recv_seqnum = int(data[16:24])
+            recv_acknum = int(data[24:32])
+            msg_type = data[32:36]
+            frag_ident = data[36:40]
+            fragnum = int(data[40:48])
+            recv_msg = data[48:]
+            
+            if msg_type != "KA  " and recv_seqnum == acknum.get(): # Process non-keepalive messages
+                if frag_ident=="FRAG": # Fragemented message
+                    if not ( prev_fragnum == fragnum or prev_fragnum == None ):
+                        fraglist = []
+                        logger.error("FRAGMENT NUMBER CHANGED. Previous fragment dropped.")
+                    # Add fragment
+                    fraglist.append(recv_msg)
+                    prev_fragnum = fragnum
+                    # last fragment
+                    if fragnum == recv_seqnum:
+                        msg_action[msg_type]("".join(fraglist))
+                        prev_fragnum = None
+                        fraglist = []
+                else: # Full message
+                    msg_action[msg_type](recv_msg)
+                
+                # Set ACK response
+                acknum.set((recv_seqnum + 1) % 100000000)
+                ka_payload = [punch_key, STATEMAP[state],
+                              "00000000", "{:08}".format(acknum.get()),
+                              "KA  ", "FULL", "00000000"]
+                ka_payload = "".join(ka_payload)
+                ka_box.set((ka_payload,other_addr))
+                next_time.set(time.time())
+            
+            # Update other_acknum for sender (Any message, including keepalive, can unpdate ACKs)
+            other_acknum.set( max(other_acknum.get(), recv_acknum) ) # NEED TO ACOUNT FOR OVERFLOW #TODO
+        
         # Receive data (ignore non-NAT punchthrough datagrams)
         while ka_interval.get() > 0:
             try:
@@ -205,13 +250,65 @@ def punchthrough_receive(app, room_id, server_address):
             if address == other_addr and data[0:8] == punch_key:
                 break
 
-def sender(s, other_addr, sendqueue, send_semaphore, ka_interval):
+
+def sender(sender_params):
+    s = sender_params["s"]
+    other_addr = sender_params["other_addr"]
+    other_acknum = sender_params["other_acknum"]
+    sendqueue = sender_params["sendqueue"]
+    send_semaphore = sender_params["send_semaphore"]
+    ka_interval = sender_params["ka_interval"]
+    next_ka_time = sender_params["next_ka_time"]
+    acknum = sender_params["acknum"]
+    first_header = sender_params["first_header"]
+    app = sender_params["app"]
+    
+    windowsize = 1
+    window = collections.deque(maxlen=windowsize) # (fullmsg, seqnum) waiting for ack. fullmsg is header+message.
+    timeout = 3 # timeout for window to resend in seconds
+    next_timeout = time.time()
+    seqnum = 0
+    
     while ka_interval.get() > 0:
-        send_semaphore.acquire()
-        tosend = sendqueue.popleft()
-        # NEED TO FOLLOW PROTOCOL!! #TODO
-        # More processing for fragmented messages needed. #TODO
-        s.sendto(tosend, other_addr)
+        # Remove ACK'd messages.
+        while len(window) > 0 and window[0][1] < other_acknum.get(): # need to account for overflow (NOT CURRENTLY ACCOUNTED FOR) #TODO
+            window.popleft()
+        
+        # window timed out, resend
+        if time.time() > next_timeout:
+            for fullmsg, msg_seqnum in window:
+                s.sendto(fullmsg, other_addr)
+            next_timeout = time.time() + timeout
+        
+        # window is not full and there are messages, send more.
+        if len(window) < windowsize and send_semaphore.acquire(False):
+            msg, msg_type, frag_ident, fragnum = sendqueue.popleft()
+            
+            # Message exceeds max payload size 50000B, fragment and requeue
+            # (max payload size must be less than max_UDP_payload - header_size, 50K is a nice round number.)
+            if frag_ident=="FULL" and len(msg) > 50000:
+                num_frags = ((len(msg)-1)//50000)+1 # ceil division
+                last_seqnum = (seqnum + num_frags) % 100000000 # Account for overflow
+                # insert reverse order so that popleft will be in order.
+                for i in range(numfrags, 0, -1):
+                    msgfrag = msg[i,i+50000]
+                    sendqueue.appendleft((msgfrag, msg_type, "FRAG", "{:08}".format(last_seqnum)))
+                    send_semaphore.release()
+            else: # Normal message to send.
+                seqnum = (seqnum + 1) % 100000000 # Account for overflow
+                fullmsg = [first_header,
+                           "{:08}".format(seqnum), "{:08}".format(acknum.get()),
+                           msg_type, frag_ident, fragnum,
+                           msg]
+                fullmsg = "".join(fullmsg)
+                s.sendto(fullmsg, other_addr)
+                window.append((fullmsg, seqnum))
+                next_ka_time.set(time.time() + ka_interval.get())
+                next_timeout = time.time() + timeout
+                if msg_type == "MSG ":
+                    app.insert_text("Me: {}".format(msg))
+        else: # nothing to send, sleep (poll).
+            time.sleep(0.1)
 
 
 
