@@ -179,7 +179,7 @@ def punchthrough_receive(app, room_id, server_address):
     send_semaphore = threading.Semaphore(0)
     app.allow_sending(sendqueue, send_semaphore)
     other_acknum = AtomicVariable(1)
-    acknum = AtomicVariable(1)
+    acknum = AtomicVariable(99999998) # Should start from 1. Start at 99999997+1 to prove that handles overflow.
     sender_params = {"sendqueue" : sendqueue,
                      "send_semaphore" : send_semaphore,
                      "other_acknum" : other_acknum,
@@ -239,7 +239,7 @@ def punchthrough_receive(app, room_id, server_address):
                 next_time.set(time.time())
             
             # Update other_acknum for sender (Any message, including keepalive, can unpdate ACKs)
-            other_acknum.set( max(other_acknum.get(), recv_acknum) ) # NEED TO ACOUNT FOR OVERFLOW #TODO
+            other_acknum.set(recv_acknum)
         
         # Receive data (ignore non-NAT punchthrough datagrams)
         while ka_interval.get() > 0:
@@ -267,11 +267,17 @@ def sender(sender_params):
     window = collections.deque(maxlen=windowsize) # (fullmsg, seqnum) waiting for ack. fullmsg is header+message.
     timeout = 3 # timeout for window to resend in seconds
     next_timeout = time.time()
-    seqnum = 0
+    seqnum = 99999997 # Should start from 0. Start at 99999997 to prove that handles overflow.
     
     while ka_interval.get() > 0:
         # Remove ACK'd messages.
-        while len(window) > 0 and window[0][1] < other_acknum.get(): # need to account for overflow (NOT CURRENTLY ACCOUNTED FOR) #TODO
+        acked_seqnum = (other_acknum.get() - 1) % 100000000
+        popnum = 0
+        for i, (fullmsg, msg_seqnum) in enumerate(window, 1):
+            if msg_seqnum == acked_seqnum:
+                popnum = i
+                break
+        for i in range(popnum):
             window.popleft()
         
         # window timed out, resend
