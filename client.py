@@ -218,7 +218,7 @@ def punchthrough_receive(app, room_id, server_address):
         filename = msg_list[0]
         msg_list.pop(0)
         file_data = "|".join(msg_list)
-        with open(msg_list[0], 'w+') as f:
+        with open(filename, 'w+') as f:
             f.write(file_data)
         app.insert_text("File saved: {}".format(filename))
 
