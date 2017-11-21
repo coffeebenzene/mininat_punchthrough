@@ -60,8 +60,9 @@ class Application(ttk.Frame):
 
     def send(self, event=None):
         usr_input = self.input_field.get()
-        command, arg = usr_input.split(" ",1)
-        if command.lower() == ">sendfile":
+        usr_input_list = usr_input.split(" ",1)
+        if usr_input_list[0].lower() == ">sendfile":
+            arg = usr_input_list[1]
             msg_type = "FILE"
             try:
                 with open(arg) as f:
