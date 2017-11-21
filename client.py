@@ -60,21 +60,22 @@ class Application(ttk.Frame):
 
     def send(self, event=None):
         usr_input = self.input_field.get()
-        usr_inp_list = usr_input.split(" ")
-        if usr_inp_list[0] == ">sendfile":
+        command, arg = usr_input.split(" ",1)
+        if command.lower() == ">sendfile":
             msg_type = "FILE"
             try:
-                with open(usr_inp_list[1]) as f:
-                    l = usr_inp_list[1]
-                    l += "|"
-                    l += f.read()
+                with open(arg) as f:
+                    msg = arg + "|" + f.read()
+                self.insert_text("Sending file {}...".format(arg))
             except IOError:
                 self.insert_text("Error: File could not be read")
+                self.input_val.set("")
+                return
         else:
             msg_type = "MSG "
-            l = usr_input
+            msg = usr_input
 
-        self.sendqueue.append((l, msg_type, "FULL", "00000000"))
+        self.sendqueue.append((msg, msg_type, "FULL", "00000000"))
         self.input_val.set("")
         self.send_semaphore.release()
 
@@ -214,9 +215,7 @@ def punchthrough_receive(app, room_id, server_address):
     # keepalive() is used for sending ACKs.
     # ASSUMES DATAGRAMS ARE RECEIVED IN ORDER.
     def recv_file(recv_msg):
-        msg_list = recv_msg.split("|", 1)
-        filename = msg_list[0]
-        file_data = msg_list[1]
+        filename, file_data = recv_msg.split("|", 1)
         with open(filename, 'w+') as f:
             f.write(file_data)
         app.insert_text("File saved: {}".format(filename))
@@ -319,8 +318,8 @@ def sender(sender_params):
                 num_frags = ((len(msg)-1)//50000)+1 # ceil division
                 last_seqnum = (seqnum + num_frags) % 100000000 # Account for overflow
                 # insert reverse order so that popleft will be in order.
-                for i in range(numfrags, 0, -1):
-                    msgfrag = msg[i,i+50000]
+                for i in range(num_frags, 0, -1):
+                    msgfrag = msg[(i-1)*50000:i*50000]
                     sendqueue.appendleft((msgfrag, msg_type, "FRAG", "{:08}".format(last_seqnum)))
                     send_semaphore.release()
             else: # Normal message to send.
