@@ -69,7 +69,7 @@ class Application(ttk.Frame):
                     l += "|"
                     l += f.read()
             except IOError:
-                app.insert_text("Error: File could not be read")
+                self.insert_text("Error: File could not be read")
         else:
             msg_type = "MSG "
             l = usr_input
