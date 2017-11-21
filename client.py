@@ -214,10 +214,9 @@ def punchthrough_receive(app, room_id, server_address):
     # keepalive() is used for sending ACKs.
     # ASSUMES DATAGRAMS ARE RECEIVED IN ORDER.
     def recv_file(recv_msg):
-        msg_list = recv_msg.split("|")
+        msg_list = recv_msg.split("|", 1)
         filename = msg_list[0]
-        msg_list.pop(0)
-        file_data = "|".join(msg_list)
+        file_data = msg_list[1]
         with open(filename, 'w+') as f:
             f.write(file_data)
         app.insert_text("File saved: {}".format(filename))
