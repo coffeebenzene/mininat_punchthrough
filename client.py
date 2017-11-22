@@ -240,7 +240,7 @@ def sender(s, other_addr, sendqueue, send_semaphore, ka_interval):
             for i in sliced_array:
                 print(seqnum)
                 # tosend = seqnum + acknum+i
-                tosend = i 
+                tosend = i
                 # print(len(tosend))
                 # tosend = str(seqnum) + str(acknum) + i
                 s.sendto(tosend, other_addr)
